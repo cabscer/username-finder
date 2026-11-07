@@ -65,6 +65,7 @@
       <span>Taken <b id="sTaken">0</b></span>
       <span>Errors <b id="sErr" style="color:var(--bad)">0</b></span>
       <span>Index <b id="sIdx">0</b></span>
+      <span>Pace <b id="sPace">0</b> ms</span>
     </div>
     <div id="status">Idle.</div>
     <div id="found" aria-live="polite"></div>
@@ -75,6 +76,7 @@
 const $ = id => document.getElementById(id);
 let state = { running:false, paused:false, stop:false };
 let found = [], pending = [], counts = { checked:0, taken:0, err:0 }, hookWarned = false;
+let hit429 = false, curDelay = 1500, okStreak = 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const setStatus = t => $("status").textContent = t;
 
@@ -99,6 +101,7 @@ function render(index, totalCount){
   $("sTaken").textContent = counts.taken;
   $("sErr").textContent = counts.err;
   $("sIdx").textContent = index;
+  $("sPace").textContent = Math.round(curDelay);
   $("fill").style.width = (totalCount ? index / totalCount * 100 : 0) + "%";
 }
 
@@ -124,7 +127,8 @@ async function check(name){
     const r = await fetch("/api/check?u=" + encodeURIComponent(name));
     const j = await r.json().catch(() => ({}));
     if (r.status === 429){
-      const wait = (j.retry_after || 5) * 1000 + 500;
+      hit429 = true;
+      const wait = (j.retry_after || 5) * 1000 + 500 + Math.random() * 500;
       setStatus("Rate limited. Waiting " + Math.ceil(wait / 1000) + "s…");
       await sleep(wait); continue;
     }
@@ -139,6 +143,7 @@ async function run(){
   const lengths = mode === "both" ? [2, 3] : [Number(mode)];
   const delay = Math.max(200, Number($("delay").value) || 1500);
   const startAt = Math.max(0, Number($("start").value) || 0);
+  curDelay = delay; okStreak = 0; hit429 = false;
   const totalCount = total(chars, lengths);
 
   counts = { checked:0, taken:0, err:0 }; found = []; pending = []; hookWarned = false;
@@ -157,6 +162,8 @@ async function run(){
     try{
       const free = await check(name);
       counts.checked++; errs = 0;
+      if (hit429){ curDelay = Math.min(curDelay * 1.5, 15000); okStreak = 0; hit429 = false; }
+      else if (++okStreak >= 20){ curDelay = Math.max(delay, curDelay * 0.9); okStreak = 0; }
       if (free){
         found.push(name); pending.push(name);
         const c = document.createElement("span"); c.className = "chip"; c.textContent = name;
@@ -170,7 +177,7 @@ async function run(){
     }
     i++;
     render(i, totalCount);
-    await sleep(delay);
+    await sleep(curDelay);
   }
 
   render(i, totalCount);
